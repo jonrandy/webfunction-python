@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "webfunction"
+version = "0.1.0"
+description = "Reference client library for the Web Function (wfn) protocol"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "httpx>=0.24",
+]
+
+[project.urls]
+Homepage = "https://webfunction.org"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/webfunction"]
