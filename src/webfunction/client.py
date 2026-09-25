@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 from typing import Any, Dict, List, Optional
-from urllib.parse import urljoin
 
 import httpx
 
@@ -21,11 +20,27 @@ from .pipeline import AsyncPipeline, Pipeline
 
 
 def _join_url(base_url: str, endpoint_name: str) -> str:
-    # Plain RFC 3986 relative-reference resolution, matching Ruby's URI.join exactly
-    # (webfunction-go originally used url.JoinPath here and had to switch to
-    # url.URL.ResolveReference to match Ruby's semantics -- urljoin already does the
-    # right thing, so no workaround is needed in Python).
-    return urljoin(base_url, endpoint_name)
+    # Plain string-level normalization per
+    # https://webfunction.org/package#url-composition: append endpoint_name
+    # directly if base_url ends in "/", otherwise insert a single "/".
+    #
+    # This deliberately does NOT use urljoin/RFC 3986 relative-reference
+    # resolution, despite the comment that used to be here claiming urljoin
+    # "already does the right thing to match Ruby's URI.join semantics".
+    # That was wrong: RFC 3986 resolution treats a base_url path segment as
+    # replaceable when base_url doesn't end in "/" -- e.g. resolving
+    # "list-people" against "https://api.example.com/v1" (no trailing
+    # slash) silently drops "v1" and produces
+    # "https://api.example.com/list-people" instead of
+    # "https://api.example.com/v1/list-people". The spec's own composition
+    # rule has no such failure mode: it works correctly for a base_url with
+    # or without a trailing slash. (Ruby's URI.join has the identical bug,
+    # confirmed directly -- so "matching Ruby" was never actually a safe
+    # bar to aim for here; webfunction-go had the same bug for the same
+    # reason and has since been fixed the same way.)
+    if base_url.endswith("/"):
+        return base_url + endpoint_name
+    return base_url + "/" + endpoint_name
 
 
 class Client:

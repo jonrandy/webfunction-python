@@ -355,6 +355,35 @@ class TypeValidationTests(unittest.TestCase):
         self.assertFalse(t.valid("::1"))
 
 
+class JoinUrlTests(unittest.TestCase):
+    """Regression tests for webfunction.client._join_url.
+
+    A previous version used urllib.parse.urljoin (RFC 3986 relative-
+    reference resolution), on the mistaken belief that this "already does
+    the right thing" to match Ruby's URI.join. That's a real bug: RFC 3986
+    resolution treats a base_url path segment as replaceable when base_url
+    doesn't end in "/", so a base_url like "https://api.example.com/v1"
+    (no trailing slash) had its "v1" silently dropped instead of the
+    endpoint name being appended under it. The spec
+    (https://webfunction.org/package#url-composition) calls for plain
+    string-level normalization instead, which has no such failure mode.
+    """
+
+    def test_join_url(self):
+        from webfunction.client import _join_url
+
+        cases = [
+            ("https://api.example.com", "list-people", "https://api.example.com/list-people"),
+            ("https://api.example.com/", "list-people", "https://api.example.com/list-people"),
+            ("https://api.example.com/v1", "list-people", "https://api.example.com/v1/list-people"),
+            ("https://api.example.com/v1/", "list-people", "https://api.example.com/v1/list-people"),
+            ("https://api.example.com/v1/merchants", "list-people", "https://api.example.com/v1/merchants/list-people"),
+        ]
+        for base_url, name, expected in cases:
+            with self.subTest(base_url=base_url, name=name):
+                self.assertEqual(_join_url(base_url, name), expected)
+
+
 class AsyncClientTests(unittest.TestCase):
     """A representative (not exhaustive) async mirror of the sync suite above --
     dynamic dispatch, pagination, and pipelining, run via asyncio.run()."""
