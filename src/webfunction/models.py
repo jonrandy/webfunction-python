@@ -75,6 +75,10 @@ class Argument(Flaggable):
     def optional(self) -> bool:
         return not self.required
 
+    @property
+    def private(self) -> bool:
+        return self.has_flag("private")
+
     @classmethod
     def from_dict(cls, d: Any) -> Optional["Argument"]:
         if not isinstance(d, dict) or not d.get("name") or not d.get("type"):
@@ -104,6 +108,10 @@ class Attribute(Flaggable):
     @property
     def nullable(self) -> bool:
         return self.has_flag("nullable")
+
+    @property
+    def private(self) -> bool:
+        return self.has_flag("private")
 
     @classmethod
     def from_dict(cls, d: Any) -> Optional["Attribute"]:
