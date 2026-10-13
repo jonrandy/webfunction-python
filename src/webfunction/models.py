@@ -26,6 +26,12 @@ def _normalize_strings(items: Any) -> List[str]:
     return _normalize_array(items, lambda i: str(i))
 
 
+def _has_type(raw: Any) -> bool:
+    """True if a ``type``/``returns`` value is present. An empty object counts: it is a
+    malformed generic application, which resolves to ``any`` rather than being dropped."""
+    return bool(raw) or isinstance(raw, dict)
+
+
 def _normalize_choices(raw: Any) -> list:
     if isinstance(raw, list):
         return list(raw)
@@ -81,7 +87,7 @@ class Argument(Flaggable):
 
     @classmethod
     def from_dict(cls, d: Any) -> Optional["Argument"]:
-        if not isinstance(d, dict) or not d.get("name") or not d.get("type"):
+        if not isinstance(d, dict) or not d.get("name") or not _has_type(d.get("type")):
             return None
         return cls(
             name=d["name"],
@@ -115,7 +121,7 @@ class Attribute(Flaggable):
 
     @classmethod
     def from_dict(cls, d: Any) -> Optional["Attribute"]:
-        if not isinstance(d, dict) or not d.get("name") or not d.get("type"):
+        if not isinstance(d, dict) or not d.get("name") or not _has_type(d.get("type")):
             return None
         return cls(
             name=d["name"],
@@ -245,7 +251,7 @@ class Endpoint(Flaggable):
 
     @classmethod
     def from_dict(cls, d: Any) -> Optional["Endpoint"]:
-        if not isinstance(d, dict) or not d.get("name") or not d.get("returns"):
+        if not isinstance(d, dict) or not d.get("name") or not _has_type(d.get("returns")):
             return None
         return cls(
             name=d["name"],
