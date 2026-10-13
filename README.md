@@ -73,6 +73,16 @@ All errors are subclasses of `WebFunctionError`, carrying `.code`, `.message`, a
 `.details`: `BadRequestError`, `UnexpectedStatusCodeError`, `JsonParseError`,
 `UnresolvedPromiseError`.
 
+## Generics
+
+A generic object (an object definition using the type parameter `T`) is applied
+to a type as `{"object.list": "object.user"}`. `wftype.parse` represents that as
+an object type with `arg` set, printing as `object.list<object.user>`; `objects`
+lists both names. The library doesn't resolve generics itself, and never fails on
+them: an unresolved `T` reads as `any` (`param` is true, for tooling that wants to
+tell it from a literal `any`), and a malformed application becomes `any` with the
+reason in `malformed`.
+
 ## A note on unknown fields
 
 This library never validates incoming JSON against a strict schema -- model classes

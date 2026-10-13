@@ -121,11 +121,27 @@ REFINEMENT_VALIDATORS = {
 }
 
 
+# Reasons recorded in ``Type.malformed`` for an invalid generic application. Such a type
+# resolves to ``any`` (so a package using generics, even incorrectly, still loads) and
+# keeps the reason so validation tooling can still report it.
+MALFORMED_KEY_COUNT = "key-count"  # the application object did not have exactly one key
+MALFORMED_KEY_PREFIX = "key-prefix"  # the key was not "object.<name>"
+MALFORMED_ARGUMENT = "argument"  # the value was not a valid type
+
+
 class Type:
     """Base class for all type nodes. Not instantiated directly."""
 
     base_type: Optional[str] = None
     refinement: Optional[str] = None
+    # The type argument when this is a generic object applied to a type
+    # ({"object.list": "object.user"} is object.list with arg object.user). None otherwise.
+    arg: Optional["Type"] = None
+    # One of the MALFORMED_* reasons for an invalid generic application (parsed as ``any``).
+    malformed: Optional[str] = None
+    # True for the generic type parameter token "T". It is ``any`` to every consumer; this
+    # only lets tooling that expands generics tell it from a literal ``any``.
+    param: bool = False
 
     def format(self, fmt: str = "default") -> str:
         raise NotImplementedError
@@ -145,29 +161,42 @@ class Type:
 
 
 class BaseTypeNode(Type):
-    def __init__(self, base_type: str, refinement: Optional[str] = None):
+    def __init__(self, base_type: str, refinement: Optional[str] = None, arg: Optional[Type] = None):
         self.base_type = base_type
         self.refinement = refinement
+        self.arg = arg
 
     def format(self, fmt: str = "default") -> str:
         if fmt == "compact":
             return self.refinement or self.base_type
         if fmt == "base":
             return self.base_type
-        return f"{self.base_type}.{self.refinement}" if self.refinement else self.base_type
+        text = f"{self.base_type}.{self.refinement}" if self.refinement else self.base_type
+        if self.arg is not None:
+            text += f"<{self.arg.format(fmt)}>"
+        return text
 
     def __eq__(self, other):
-        return isinstance(other, BaseTypeNode) and other.base_type == self.base_type and other.refinement == self.refinement
+        return (
+            isinstance(other, BaseTypeNode)
+            and other.base_type == self.base_type
+            and other.refinement == self.refinement
+            and other.arg == self.arg
+        )
 
     def __hash__(self):
-        return hash((BaseTypeNode, self.base_type, self.refinement))
+        return hash((BaseTypeNode, self.base_type, self.refinement, self.arg))
 
     def __repr__(self):
-        return f"<{self.base_type} {self.refinement}>" if self.refinement else f"<{self.base_type}>"
+        text = f"<{self.base_type} {self.refinement}>" if self.refinement else f"<{self.base_type}>"
+        return text if self.arg is None else f"{text[:-1]} of {self.arg!r}>"
 
     @property
     def objects(self) -> List[str]:
-        return [self.refinement] if self.base_type == "object" and self.refinement else []
+        names = [self.refinement] if self.base_type == "object" and self.refinement else []
+        if self.arg is not None:
+            names += [o for o in self.arg.objects if o not in names]
+        return names
 
     def without_refinements(self) -> "Type":
         return self if self.refinement is None else BaseTypeNode(self.base_type)
@@ -257,6 +286,10 @@ class UnionType(Type):
 class AnyType(Type):
     base_type = "any"
 
+    def __init__(self, *, param: bool = False, malformed: Optional[str] = None):
+        self.param = param
+        self.malformed = malformed
+
     def format(self, fmt: str = "default") -> str:
         return "any"
 
@@ -274,6 +307,7 @@ class AnyType(Type):
 
 
 def any_type() -> Type: return AnyType()
+def param_type() -> Type: return AnyType(param=True)
 def string_type(refinement: Optional[str] = None) -> Type: return BaseTypeNode("string", refinement)
 def number_type(refinement: Optional[str] = None) -> Type: return BaseTypeNode("number", refinement)
 def object_type(refinement: Optional[str] = None) -> Type: return BaseTypeNode("object", refinement)
@@ -293,6 +327,8 @@ def union_of(types: List[Type]) -> Type:
 
 
 def _base(type_str: str) -> Optional[Type]:
+    if type_str == "T":
+        return param_type()
     base_type, _, refinement = type_str.partition(".")
     refinement = refinement or None
 
@@ -317,9 +353,24 @@ def _base(type_str: str) -> Optional[Type]:
     return None
 
 
+def _application(raw: dict) -> Type:
+    """Parses a generic application, {"object.<name>": <type>}. Anything that is not exactly
+    that shape resolves to ``any`` carrying the reason in ``malformed``, rather than failing."""
+    if len(raw) != 1:
+        return AnyType(malformed=MALFORMED_KEY_COUNT)
+    (key, value), = raw.items()
+    if not isinstance(key, str) or not key.startswith("object.") or key == "object.":
+        return AnyType(malformed=MALFORMED_KEY_PREFIX)
+    if isinstance(value, (bool, int, float)):
+        return AnyType(malformed=MALFORMED_ARGUMENT)
+    return BaseTypeNode("object", key[len("object."):], parse(value))
+
+
 def _detect(raw: Any) -> Optional[Type]:
     if isinstance(raw, str):
         return _base(raw)
+    if isinstance(raw, dict):
+        return _application(raw)
     if isinstance(raw, list):
         types = [t for t in (_detect(r) for r in raw) if t is not None]
         if not types:
@@ -329,7 +380,8 @@ def _detect(raw: Any) -> Optional[Type]:
 
 
 def parse(raw: _TypingUnion[str, List[Any], None]) -> Type:
-    """Parses a wfn ``type`` value (a string, or an array of strings/arrays) into a Type node."""
+    """Parses a wfn ``type`` value (a string, a generic application object, or an array of
+    strings/arrays/application objects) into a Type node."""
     items = raw if isinstance(raw, list) else ([raw] if raw is not None else [])
     types = [t for t in (_detect(r) for r in items) if t is not None]
     if not types:
