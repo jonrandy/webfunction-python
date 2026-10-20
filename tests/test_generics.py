@@ -147,5 +147,128 @@ class PackageWithGenerics(unittest.TestCase):
         self.assertEqual(pkg.object("list", context="attributes").attribute("items").type.format(), "array<any>")
 
 
+class ArrayApplications(unittest.TestCase):
+    """{"array": X} is the canonical way to write an array of X; it must parse like the legacy [[X]]."""
+
+    PAIRS = [
+        ({"array": "string"}, [["string"]]),
+        ({"array": "object.user"}, [["object.user"]]),
+        ({"array": ["string", "null"]}, [["string", "null"]]),
+        ({"array": "T"}, [["T"]]),
+        ({"array": {"array": "string"}}, [[["string"]]]),
+        ({"array": {"object.page": "object.user"}}, [[{"object.page": "object.user"}]]),
+        ({"object.page": {"array": "object.user"}}, {"object.page": [["object.user"]]}),
+        ([{"array": "string"}, "null"], [["string"], "null"]),
+    ]
+
+    def test_equivalent_to_the_legacy_form(self):
+        for application, legacy in self.PAIRS:
+            a, l = wftype.parse(application), wftype.parse(legacy)
+            self.assertEqual(a, l, application)
+            for style in ("default", "compact", "base"):
+                self.assertEqual(a.format(style), l.format(style), (application, style))
+            self.assertEqual(a.objects, l.objects, application)
+
+    def test_formats(self):
+        cases = [
+            ({"array": "string"}, "array<string>"),
+            ({"array": "object.user"}, "array<object.user>"),
+            ({"array": ["string", "number"]}, "array<string | number>"),
+            ({"array": {"array": "string"}}, "array<array<string>>"),
+            ({"array": {"object.page": "object.user"}}, "array<object.page<object.user>>"),
+            ({"object.page": {"array": "object.user"}}, "object.page<array<object.user>>"),
+            ({"array": "T"}, "array<any>"),
+            ([{"array": "string"}, "null"], "array<string> | null"),
+            (["array", {"array": "string"}], "array<any> | array<string>"),
+        ]
+        for raw, want in cases:
+            self.assertEqual(fmt(raw), want, raw)
+        self.assertEqual(wftype.parse({"array": "string"}).format("base"), "array")
+
+    def test_shape(self):
+        t = wftype.parse({"array": "object.user"})
+        self.assertIsInstance(t, wftype.ArrayType)
+        self.assertEqual(t.base_type, "array")
+        self.assertEqual(t.of.format(), "object.user")
+        self.assertIsNone(t.malformed)
+        self.assertTrue(wftype.parse({"array": "T"}).of.param)
+
+    def test_objects(self):
+        self.assertEqual(wftype.parse({"array": "object.user"}).objects, ["user"])
+        self.assertEqual(wftype.parse({"array": {"object.page": "object.user"}}).objects, ["page", "user"])
+        self.assertEqual(wftype.parse({"object.page": {"array": "object.user"}}).objects, ["page", "user"])
+        self.assertEqual(wftype.parse({"array": {"array": "object.user"}}).objects, ["user"])
+
+    def test_valid(self):
+        strings = wftype.parse({"array": "string"})
+        self.assertTrue(strings.valid(["a", "b"]))
+        self.assertTrue(strings.valid([]))
+        self.assertFalse(strings.valid([1]))
+        self.assertFalse(strings.valid("a"))
+        self.assertFalse(strings.valid(None))
+        mixed = wftype.parse({"array": ["string", "number"]})
+        self.assertTrue(mixed.valid(["a", 1]))
+        self.assertFalse(mixed.valid([True]))
+        nested = wftype.parse({"array": {"array": "number"}})
+        self.assertTrue(nested.valid([[1], []]))
+        self.assertFalse(nested.valid([["a"]]))
+
+    def test_malformed_ones_stay_malformed(self):
+        cases = [
+            ({"array": "string", "object.a": "string"}, wftype.MALFORMED_KEY_COUNT),
+            ({"array": 5}, wftype.MALFORMED_ARGUMENT),
+            ({"array": True}, wftype.MALFORMED_ARGUMENT),
+            ({"arrays": "string"}, wftype.MALFORMED_KEY_PREFIX),
+            ({"array.x": "string"}, wftype.MALFORMED_KEY_PREFIX),
+            ({"Array": "string"}, wftype.MALFORMED_KEY_PREFIX),
+        ]
+        for raw, reason in cases:
+            t = wftype.parse(raw)
+            self.assertEqual(t.base_type, "any", raw)
+            self.assertEqual(t.malformed, reason, raw)
+            self.assertTrue(t.valid("anything"), raw)
+
+
+class UnionOfOneEntry(unittest.TestCase):
+    """Spec: a union of one entry is that entry. The parser already collapses it; this pins it."""
+
+    def test_one_entry_is_that_entry(self):
+        self.assertEqual(wftype.parse(["string"]), wftype.parse("string"))
+        self.assertEqual(wftype.parse(["string.email"]).format("compact"), "email")
+        self.assertEqual(fmt(["string.email"]), "string.email")
+        self.assertTrue(wftype.parse(["T"]).param)
+        self.assertEqual(wftype.parse([{"array": "string"}]), wftype.parse({"array": "string"}))
+        self.assertEqual(wftype.parse([{"object.list": "object.user"}]), wftype.parse({"object.list": "object.user"}))
+
+    def test_the_legacy_array_shorthand_is_not_a_one_entry_union(self):
+        self.assertIsInstance(wftype.parse([["string"]]), wftype.ArrayType)
+        self.assertEqual(fmt([["string"]]), "array<string>")
+
+    def test_more_than_one_entry_stays_a_union(self):
+        self.assertIsInstance(wftype.parse(["string", "null"]), wftype.UnionType)
+
+
+class PackageWithArrayApplications(unittest.TestCase):
+    def test_package_loads(self):
+        pkg = wf.Package.from_dict(
+            {
+                "base_url": "https://api.example.com/",
+                "endpoints": [{"name": "get-comments", "returns": {"array": "object.comment"}, "arguments": []}],
+                "objects": [
+                    {
+                        "name": "comment",
+                        "attributes": [
+                            {"name": "id", "type": "string.uuid"},
+                            {"name": "message", "type": "string"},
+                            {"name": "replies", "type": {"array": "object.comment"}},
+                        ],
+                    }
+                ],
+            }
+        )
+        self.assertEqual(pkg.endpoint("get-comments").returns.format(), "array<object.comment>")
+        self.assertEqual(pkg.object("comment", context="attributes").attribute("replies").type.format(), "array<object.comment>")
+
+
 if __name__ == "__main__":
     unittest.main()
