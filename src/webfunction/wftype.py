@@ -125,7 +125,7 @@ REFINEMENT_VALIDATORS = {
 # resolves to ``any`` (so a package using generics, even incorrectly, still loads) and
 # keeps the reason so validation tooling can still report it.
 MALFORMED_KEY_COUNT = "key-count"  # the application object did not have exactly one key
-MALFORMED_KEY_PREFIX = "key-prefix"  # the key was not "object.<name>"
+MALFORMED_KEY_PREFIX = "key-prefix"  # the key was neither "object.<name>" nor "array"
 MALFORMED_ARGUMENT = "argument"  # the value was not a valid type
 
 
@@ -354,11 +354,17 @@ def _base(type_str: str) -> Optional[Type]:
 
 
 def _application(raw: dict) -> Type:
-    """Parses a generic application, {"object.<name>": <type>}. Anything that is not exactly
-    that shape resolves to ``any`` carrying the reason in ``malformed``, rather than failing."""
+    """Parses a type application: a generic object applied to a type, {"object.<name>": <type>},
+    or an array of a type, {"array": <type>} (the same as [[<type>]]). Anything that is not
+    exactly one of those shapes resolves to ``any`` carrying the reason in ``malformed``,
+    rather than failing."""
     if len(raw) != 1:
         return AnyType(malformed=MALFORMED_KEY_COUNT)
     (key, value), = raw.items()
+    if key == "array":
+        if isinstance(value, (bool, int, float)):
+            return AnyType(malformed=MALFORMED_ARGUMENT)
+        return ArrayType(parse(value))
     if not isinstance(key, str) or not key.startswith("object.") or key == "object.":
         return AnyType(malformed=MALFORMED_KEY_PREFIX)
     if isinstance(value, (bool, int, float)):
@@ -380,8 +386,8 @@ def _detect(raw: Any) -> Optional[Type]:
 
 
 def parse(raw: _TypingUnion[str, List[Any], None]) -> Type:
-    """Parses a wfn ``type`` value (a string, a generic application object, or an array of
-    strings/arrays/application objects) into a Type node."""
+    """Parses a wfn ``type`` value (a string, an application object, or an array of
+    strings/arrays/application objects) into a Type node. A union of one entry is that entry."""
     items = raw if isinstance(raw, list) else ([raw] if raw is not None else [])
     types = [t for t in (_detect(r) for r in items) if t is not None]
     if not types:
